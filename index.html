@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Badger Run</title>
+    <style>
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #0b1020;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      }
+      /* Single canvas for the whole project */
+      #c {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        touch-action: none; /* helps mobile gestures not scroll the page */
+      }
+      /* Simple overlay UI (allowed — still one canvas for the 3D) */
+      #overlay {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+      }
+      #topbar {
+        pointer-events: auto;
+        position: absolute;
+        left: 12px;
+        top: 12px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(0,0,0,0.45);
+        color: white;
+        backdrop-filter: blur(6px);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      }
+      #groupId {
+        font-weight: 700;
+        letter-spacing: 0.3px;
+      }
+      #modeToggle label {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        cursor: pointer;
+        user-select: none;
+        font-size: 14px;
+      }
+      #hint {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        color: rgba(255,255,255,0.85);
+        background: rgba(0,0,0,0.35);
+        padding: 10px 12px;
+        border-radius: 14px;
+        max-width: min(520px, calc(100vw - 24px));
+        pointer-events: auto;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+      a { color: #9ad7ff; }
+    </style>
+  </head>
+  <body>
+    <!-- The ONE canvas required by the assignment -->
+    <canvas id="c" aria-label="Badger Run Canvas"></canvas>
+
+    <!-- Overlay UI (doesn't create extra canvases) -->
+    <div id="overlay">
+      <div id="topbar">
+        <div id="groupId">Badger Run - Group ID - 1125</div>
+
+        <div id="modeToggle" title="Prototype = primitives only. Full = models/textures.">
+          <label>
+            <input id="modeCheckbox" type="checkbox" />
+            <span>Full Mode</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="hint">
+        <b>Controls (starter):</b> Space = Jump, ↓ = Duck, R = Restart.
+        <br />
+        (We’ll wire these up in the next files.)
+      </div>
+    </div>
+
+    <!-- Vite entry (we'll create src/main.js next) -->
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
