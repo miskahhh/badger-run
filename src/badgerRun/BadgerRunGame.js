@@ -3,6 +3,9 @@ import { AssetManager } from "../assets/AssetManager.js";
 
 const STORAGE_KEY = "badgerRunProgress_v1";
 
+const ASSET = (p) => `${import.meta.env.BASE_URL}${p.replace(/^\/+/, "")}`;
+
+
 export class BadgerRunGame {
   constructor({ scene, camera, isFullMode }) {
     this.scene = scene;
@@ -65,6 +68,13 @@ export class BadgerRunGame {
 
     // world content
     this._buildMaterials();
+    this.skins = [
+    { id: "default",  name: "Default",  cost: 0,  fur: 0x2a2a2a },
+    { id: "scarlet",  name: "Scarlet",  cost: 40, fur: 0x6b1b1b },
+    { id: "midnight", name: "Midnight", cost: 75, fur: 0x0b1020 },
+    ];
+
+      
     this._buildGround();
     this._buildTrackDashes();
     this._buildBadger();
@@ -135,6 +145,48 @@ export class BadgerRunGame {
     this.activeSkinId = "classic";
   }
 
+  _applyEquippedSkin() {
+    const id = this.equippedSkinId ?? "default";
+  
+    // Pull skin from whichever catalog you actually use
+    // Prefer an array catalog (this.skins), fallback to object (this.skinDefs)
+    const skin =
+      (Array.isArray(this.skins) ? this.skins.find(s => s.id === id) : null) ||
+      (this.skinDefs ? this.skinDefs[id] : null) ||
+      null;
+  
+    // Skin “fur” color (accept a few possible field names)
+    const fur =
+      skin?.fur ??
+      skin?.colors?.fur ??
+      skin?.colors?.dark ??      // backward compatible with your old palette skins
+      0x2a2a2a;
+  
+    // Proto badger: single material = fur
+    if (this.mats?.proto?.badger?.color) {
+      this.mats.proto.badger.color.setHex(fur);
+      this.mats.proto.badger.needsUpdate = true;
+    }
+  
+    // Full badger: fur = badgerDark only
+    if (this.mats?.full?.badgerDark?.color) {
+      this.mats.full.badgerDark.color.setHex(fur);
+      this.mats.full.badgerDark.needsUpdate = true;
+    }
+  
+    // Keep identity colors stable (optional but recommended)
+    if (this.mats?.full?.badgerLight?.color) {
+      this.mats.full.badgerLight.color.setHex(0xf6f6f6);
+      this.mats.full.badgerLight.needsUpdate = true;
+    }
+    if (this.mats?.full?.badgerStripe?.color) {
+      this.mats.full.badgerStripe.color.setHex(0xffffff);
+      this.mats.full.badgerStripe.needsUpdate = true;
+    }
+  }
+  
+  
+
   // ---------- UI state ----------
   getUIState() {
     const laneLabel = ["L", "C", "R"][this.playerLane] ?? "?";
@@ -182,7 +234,10 @@ export class BadgerRunGame {
 
   async setMode(mode) {
     this.mode = mode;
+    
+
     if (this.mode === "full") await this._ensureFullAssets();
+    this._setActiveBadgerVariant(this.mode === "full" ? "full" : "proto");
     this._applyModeMaterials();
   }
 
@@ -248,20 +303,36 @@ export class BadgerRunGame {
   // ---------- main update ----------
   update(dt) {
     this.t += dt;
-
+  
+    const rig = this.badger?.userData?.rig;
+  
+    // --- Optional Full-badger run cycle (safe) ---
+    if (rig?.legs && Array.isArray(rig.legs) && rig.legs.length >= 4) {
+      const t = this.t ?? 0;
+      const speed = 10.0;
+      const amp = 0.55;
+  
+      if (rig.legs[0]) rig.legs[0].rotation.z = Math.sin(t * speed) * amp; // FL
+      if (rig.legs[3]) rig.legs[3].rotation.z = Math.sin(t * speed) * amp; // BR
+      if (rig.legs[1]) rig.legs[1].rotation.z = Math.sin(t * speed + Math.PI) * amp; // FR
+      if (rig.legs[2]) rig.legs[2].rotation.z = Math.sin(t * speed + Math.PI) * amp; // BL
+  
+      if (rig.headPivot) rig.headPivot.rotation.z = Math.sin(t * speed) * 0.08;
+      if (rig.tailPivot) rig.tailPivot.rotation.y = Math.sin(t * speed) * 0.18;
+    }
+  
     const running = this.state === "running";
     const worldSpeed = running ? this.speed : 2.0; // even idle animates a bit
-
+  
     this._updateTrackDashes(dt, worldSpeed);
-
     this._updateScenery(dt, worldSpeed);
-
+  
     if (running) {
       // difficulty & movement
       this.speed += this.speedRamp * dt;
       this.speed = Math.min(this.speed, 22); // clamp a bit
       this.distance += this.speed * dt;
-
+  
       // jump physics
       this.velY += this.gravity * dt;
       this.badgerY += this.velY * dt;
@@ -269,37 +340,38 @@ export class BadgerRunGame {
         this.badgerY = 0;
         this.velY = 0;
       }
-
+  
       // telegraphed spawns
       for (let i = this.spawnQueue.length - 1; i >= 0; i--) {
         const ev = this.spawnQueue[i];
         ev.t -= dt;
-
+  
         ev.x -= this.speed * dt;
         if (ev.tele) ev.tele.position.x = ev.x;
-
+  
         const p = THREE.MathUtils.clamp((ev.lead - ev.t) / ev.lead, 0, 1);
         if (ev.tele) {
           ev.tele.visible = p > 0;
           const pulse = 0.65 + 0.35 * Math.sin(this.t * 18 + ev.lane * 2.1);
           ev.tele.material.opacity = (0.12 + 0.38 * p) * pulse;
         }
-
+  
         if (ev.t <= 0) {
           this._spawnObstacle(ev.kind, ev.lane, ev.x);
           if (ev.tele) this.world.remove(ev.tele);
           this.spawnQueue.splice(i, 1);
         }
       }
-
+  
       // decide when to queue next pattern
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) {
         this._enqueuePattern();
         const base = THREE.MathUtils.clamp(1.25 - (this.speed - 8) * 0.045, 0.55, 1.25);
-        this.spawnTimer = THREE.MathUtils.randFloat(base * 0.8, base * 1.15);
+        const modeMul = (this.mode === "full") ? 0.9 : 1.2;
+        this.spawnTimer = THREE.MathUtils.randFloat(base * 0.8, base * 1.15) * modeMul;
       }
-
+  
       // move obstacles
       for (let i = this.obstacles.length - 1; i >= 0; i--) {
         const o = this.obstacles[i];
@@ -309,10 +381,10 @@ export class BadgerRunGame {
           this.obstacles.splice(i, 1);
         }
       }
-
+  
       // move + animate + collect coins
       this._updateCoins(dt);
-
+  
       // obstacle collision
       this.boxBadger.setFromObject(this.badger);
       for (const o of this.obstacles) {
@@ -327,16 +399,15 @@ export class BadgerRunGame {
       this.badgerY = 0;
       this.velY = 0;
     }
-
+  
     // scrolling ground texture in full mode (if added)
     if (this.mode === "full" && this.textures.ground) {
       this.textures.ground.offset.x += worldSpeed * dt * 0.055;
     }
-
+  
     // --- Badger animation + lane movement ---
     const grounded = this.badgerY <= 0.0001;
-    const animRate = running ? 18 : 10;
-
+  
     // smooth lane slide
     this.badger.position.z = THREE.MathUtils.damp(
       this.badger.position.z,
@@ -344,26 +415,29 @@ export class BadgerRunGame {
       this.laneSnap,
       dt
     );
-
+  
     const bob = grounded ? Math.sin(this.t * (running ? 14 : 8)) * 0.05 : 0;
     this.badger.position.y = this.badgerY + bob;
-
-    if (grounded) {
-      const s = Math.sin(this.t * animRate);
-      const a = s * 0.9;
-      const b = -s * 0.9;
-      if (this.legs[0]) this.legs[0].rotation.x = a;
-      if (this.legs[3]) this.legs[3].rotation.x = a;
-      if (this.legs[1]) this.legs[1].rotation.x = b;
-      if (this.legs[2]) this.legs[2].rotation.x = b;
-    } else {
-      for (const leg of this.legs) leg.rotation.x = 0;
+  
+    // IMPORTANT: remove proto-only this.legs animation; use rig legs if present
+    const legs = rig?.legs;
+    if (Array.isArray(legs) && legs.length) {
+      if (!grounded) {
+        for (const leg of legs) {
+          if (leg) {
+            // rig legs are pivots in Full; proto legs are meshes
+            if (leg.rotation) leg.rotation.x = 0;
+            if (leg.rotation) leg.rotation.z = 0;
+          }
+        }
+      }
     }
-
+  
     // camera follow
     this.camera.position.lerp(new THREE.Vector3(-3.5, 3.5, 9), 0.06);
     this.camera.lookAt(0, 1.2, 0);
   }
+  
 
   _endGame() {
     this.state = "gameover";
@@ -452,6 +526,13 @@ export class BadgerRunGame {
         dash: new THREE.MeshStandardMaterial({ color: 0xf0f3f6, roughness: 0.9 }),
         tele: teleProto,
         coin: coinProto,
+        // add to proto (safe even if you only use them in full)
+        badgerDark: new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.95 }),
+        badgerLight: new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.95 }),
+        badgerStripe: new THREE.MeshStandardMaterial({ color: 0xeaeaea, roughness: 0.9 }),
+        badgerEye: new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.35, metalness: 0.1 }),
+        badgerNose: new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.25, metalness: 0.2 }),
+
   
         // scenery
         cloud: cloudProto,
@@ -466,7 +547,12 @@ export class BadgerRunGame {
         dash: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 }),
         tele: teleFull,
         coin: coinFull,
-  
+        badgerDark: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.7, metalness: 0.05 }),
+        badgerLight: new THREE.MeshStandardMaterial({ color: 0xf6f6f6, roughness: 0.65, metalness: 0.02 }),
+        badgerStripe: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.02 }),
+        badgerEye: new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.25, metalness: 0.25 }),
+        badgerNose: new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.2, metalness: 0.3 }),
+        
         // scenery
         cloud: cloudFull,
         mountain: mountainFull,
@@ -475,6 +561,190 @@ export class BadgerRunGame {
       }
     };
   }
+
+  _buildBadgerFull() {
+    const g = new THREE.Group();
+    g.name = "BadgerFull";
+  
+    const mats = this.mats.full;
+  
+    const furDark = mats.badgerDark;
+    const furLight = mats.badgerLight;
+    const stripeMat = mats.badgerStripe;
+    const eyeMat = mats.badgerEye;
+    const noseMat = mats.badgerNose;
+  
+    // --- Body (simple capsule-ish) ---
+    const body = new THREE.Group();
+  
+    const bodyMid = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.50, 0.56, 1.35, 12),
+      furDark
+    );
+    bodyMid.rotation.z = Math.PI / 2; // align length along +X
+    bodyMid.position.set(0.0, 0.95, 0.0);
+    bodyMid.castShadow = true;
+  
+    const capGeom = new THREE.SphereGeometry(0.54, 12, 10);
+    const capFront = new THREE.Mesh(capGeom, furDark);
+    capFront.position.set(0.72, 0.95, 0.0);
+    capFront.castShadow = true;
+  
+    const capBack = new THREE.Mesh(capGeom, furDark);
+    capBack.position.set(-0.72, 0.95, 0.0);
+    capBack.castShadow = true;
+  
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.46, 12, 10), furLight);
+    belly.scale.set(1.15, 0.55, 0.95);
+    belly.position.set(0.10, 0.78, 0.0);
+    belly.castShadow = true;
+  
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.08, 0.22), stripeMat);
+    stripe.position.set(0.05, 1.33, 0.0);
+    stripe.castShadow = true;
+  
+    body.add(bodyMid, capFront, capBack, belly, stripe);
+    g.add(body);
+  
+    // --- Head (pivot so we can bob/tilt later) ---
+    const headPivot = new THREE.Group();
+    headPivot.position.set(1.05, 1.10, 0.0);
+    g.add(headPivot);
+  
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.45, 0.42), furDark);
+    head.castShadow = true;
+    headPivot.add(head);
+  
+    const snout = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 0.26), furLight);
+    snout.position.set(0.32, -0.10, 0.0);
+    snout.castShadow = true;
+    headPivot.add(snout);
+  
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), noseMat);
+    nose.position.set(0.50, -0.12, 0.0);
+    nose.castShadow = true;
+    headPivot.add(nose);
+  
+    // Face stripe
+    const faceStripe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.38, 0.14), stripeMat);
+    faceStripe.position.set(0.10, 0.00, 0.0);
+    faceStripe.castShadow = true;
+    headPivot.add(faceStripe);
+  
+    // Eyes
+    const eyeGeom = new THREE.SphereGeometry(0.05, 10, 8);
+    const eyeL = new THREE.Mesh(eyeGeom, eyeMat);
+    eyeL.position.set(0.12, 0.08, 0.16);
+    eyeL.castShadow = true;
+  
+    const eyeR = new THREE.Mesh(eyeGeom, eyeMat);
+    eyeR.position.set(0.12, 0.08, -0.16);
+    eyeR.castShadow = true;
+  
+    headPivot.add(eyeL, eyeR);
+  
+    // Ears
+    const earGeom = new THREE.ConeGeometry(0.10, 0.22, 8);
+    const earL = new THREE.Mesh(earGeom, furDark);
+    earL.position.set(-0.12, 0.28, 0.18);
+    earL.rotation.x = Math.PI;
+    earL.castShadow = true;
+  
+    const earR = new THREE.Mesh(earGeom, furDark);
+    earR.position.set(-0.12, 0.28, -0.18);
+    earR.rotation.x = Math.PI;
+    earR.castShadow = true;
+  
+    headPivot.add(earL, earR);
+  
+    // --- Tail (tiny) ---
+    const tailPivot = new THREE.Group();
+    tailPivot.position.set(-1.05, 1.00, 0.0);
+    g.add(tailPivot);
+  
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.10, 0.35, 10), furDark);
+    tail.rotation.z = -Math.PI / 2;
+    tail.castShadow = true;
+    tailPivot.add(tail);
+  
+    // --- Legs (4 pivots for run swing) ---
+    const legs = [];
+    const legGeom = new THREE.CylinderGeometry(0.10, 0.12, 0.48, 8);
+  
+    const makeLeg = (x, z) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(x, 0.55, z);
+  
+      const leg = new THREE.Mesh(legGeom, furDark);
+      leg.position.y = -0.24; // hang down from pivot
+      leg.castShadow = true;
+  
+      // tiny foot pad
+      const foot = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.08, 0.18), furDark);
+      foot.position.y = -0.48;
+      foot.castShadow = true;
+  
+      pivot.add(leg, foot);
+      g.add(pivot);
+      legs.push(pivot);
+    };
+  
+    makeLeg(0.55, 0.30);  // front-left
+    makeLeg(0.55, -0.30); // front-right
+    makeLeg(-0.35, 0.30); // back-left
+    makeLeg(-0.35, -0.30);// back-right
+  
+    // --- Snap the whole model so its bottom touches y=0 (super important) ---
+    g.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(g);
+    g.position.y -= box.min.y;
+  
+    // store rig refs for optional animation
+    g.userData.rig = {
+      headPivot,
+      tailPivot,
+      legs,
+    };
+  
+    // make sure every mesh can be found for future skin tinting
+    g.traverse((o) => {
+      if (o.isMesh) {
+        o.receiveShadow = false;
+      }
+    });
+  
+    return g;
+  }
+  _buildBadger() {
+    // build both once
+    this.badgerProto = this._buildBadgerProto();
+    this.badgerFull = this._buildBadgerFull();
+  
+    // start with correct one
+    this._setActiveBadgerVariant(this.mode === "full" ? "full" : "proto");
+  }
+
+  _setActiveBadgerVariant(which) {
+    const next = which === "full" ? this.badgerFull : this.badgerProto;
+    if (!next) return;
+  
+    // preserve transform if swapping
+    const prev = this.badger;
+    if (prev) {
+      next.position.copy(prev.position);
+      next.rotation.copy(prev.rotation);
+      next.scale.copy(prev.scale);
+  
+      this.world.remove(prev);
+    }
+  
+    this.badger = next;
+    this.world.add(this.badger);
+    this._applyEquippedSkin();
+    this.badgerRig = this.badger.userData?.rig ?? null;
+
+  }
+  
   
 
   _buildGround() {
@@ -613,8 +883,7 @@ export class BadgerRunGame {
     };
   
     for (let i = 0; i < 9; i++) {
-      const side = Math.random() < 0.5 ? -1 : 1;
-      const m = makeMountain(side);
+        const m = makeMountain(-1); // LEFT side only
       this.background.add(m);
       this.scenery.mountains.push(m);
     }
@@ -657,7 +926,7 @@ export class BadgerRunGame {
   
     // place on both sides of the lane strip
     for (let i = 0; i < 18; i++) {
-      const sideZ = (Math.random() < 0.5 ? -1 : 1) * (7.2 + Math.random() * 3.2);
+        const sideZ = -(7.2 + Math.random() * 3.2); // LEFT side only
       const t = makeTree(sideZ);
       this.background.add(t);
       this.scenery.trees.push(t);
@@ -719,24 +988,25 @@ export class BadgerRunGame {
     }
   }
 
-  _buildBadger() {
+  _buildBadgerProto() {
     const g = new THREE.Group();
-    this.legs = [];
-
+  
+    const legs = []; // local, so swapping variants is clean
+  
     const body = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.55, 0.9, 8, 16),
       this.mats.proto.badger
     );
     body.position.set(0, 1.1, 0);
     g.add(body);
-
+  
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(0.35, 16, 16),
       this.mats.proto.badger
     );
     head.position.set(0.55, 1.35, 0);
     g.add(head);
-
+  
     const snout = new THREE.Mesh(
       new THREE.SphereGeometry(0.18, 16, 16),
       this.mats.proto.badger
@@ -744,7 +1014,7 @@ export class BadgerRunGame {
     snout.scale.set(1.1, 0.8, 0.8);
     snout.position.set(0.85, 1.27, 0);
     g.add(snout);
-
+  
     const legGeom = new THREE.CylinderGeometry(0.12, 0.12, 0.5, 10);
     const legOffsets = [
       [-0.2, 0.4],
@@ -756,13 +1026,15 @@ export class BadgerRunGame {
       const leg = new THREE.Mesh(legGeom, this.mats.proto.badger);
       leg.position.set(lx, 0.45, lz);
       g.add(leg);
-      this.legs.push(leg);
+      legs.push(leg);
     }
-
-    this.badger = g;
-    this.badger.position.set(0, 0, this.targetLaneZ);
-    this.world.add(this.badger);
+  
+    g.userData.rig = { legs };           // handy if you animate
+    g.position.set(0, 0, this.targetLaneZ);
+  
+    return g;
   }
+  
 
   // ---------- coins ----------
   _spawnCoin(laneIndex, x, baseY = 1.05) {
@@ -936,6 +1208,72 @@ export class BadgerRunGame {
   _spawnObstacle(kind, laneIndex, x) {
     const laneZ = this.laneZs[laneIndex] ?? 0;
   
+    // Helper: clone, scale to target height, and place bottom at desiredBottomY
+    const spawnModel = (src, { targetHeight, desiredBottomY, z }) => {
+      if (!src) return false;
+  
+      const obj = src.clone(true);
+      obj.visible = true;
+  
+      // Make sure transforms are up-to-date before measuring
+      obj.updateMatrixWorld(true);
+  
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+  
+      // If the model has no measurable geometry, bail to fallback
+      if (!isFinite(size.y) || size.y < 1e-4) return false;
+  
+      // Scale to match prototype-ish height
+      const s = targetHeight / size.y;
+
+        // simple per-kind multiplier (tune these)
+        const widthFix =
+        kind === "wall" ? 0.40 :
+        kind === "hurdle" ? 0.75 :
+        kind === "overhead" ? 3.0 :   // <-- make overhead bigger
+        1.0;
+
+        obj.scale.multiplyScalar(s * widthFix);
+
+      obj.updateMatrixWorld(true);
+  
+      // Recompute box after scaling
+      const box2 = new THREE.Box3().setFromObject(obj);
+      const size2 = new THREE.Vector3();
+      box2.getSize(size2);
+  
+      // Move so the model’s bottom sits at desiredBottomY
+      const dy = desiredBottomY - box2.min.y;
+      obj.position.y += dy;
+  
+      // Final placement
+      obj.position.x = x;
+      obj.position.z = z;
+
+      if (kind === "wall" || kind === "hurdle") {
+        obj.rotation.y += Math.PI / 2;
+      }
+  
+      // Shadows + (optional) disable frustum culling for safety while testing
+      obj.traverse((o) => {
+        if (o.isMesh) {
+          o.castShadow = true;
+          o.receiveShadow = false;
+          // If you still don’t see obstacles, uncomment this line temporarily:
+          // o.frustumCulled = false;
+        }
+      });
+  
+      obj.userData.kind = kind;
+      obj.updateMatrixWorld(true);
+  
+      this.world.add(obj);
+      this.obstacles.push(obj);
+      return true;
+    };
+  
     // ---------- FULL MODE: try glTF models first ----------
     if (this.mode === "full") {
       const key =
@@ -946,45 +1284,26 @@ export class BadgerRunGame {
   
       const src = key ? this.models?.[key] : null;
   
-      if (src) {
-        const obj = src.clone(true);
-  
-        // Position: lane obstacles use laneZ, overhead spans lanes at z=0
-        obj.position.set(x, 0, kind === "overhead" ? 0 : laneZ);
-  
-        // Default scaling (you will likely tweak once you see the model)
-        // If your model is HUGE or tiny, adjust these scalars.
-        const s =
-          kind === "wall" ? 1.0 :
-          kind === "hurdle" ? 1.0 :
-          1.0;
-        obj.scale.setScalar(s);
-  
-        // If your model’s origin is not at the ground, lift it slightly
-        // (optional; tweak if needed)
-        if (kind === "overhead") obj.position.y = 1.7; // same as your box y
-        else obj.position.y = 0;
-  
-        // Shadows
-        obj.traverse((o) => {
-          if (o.isMesh) {
-            o.castShadow = true;
-            o.receiveShadow = false;
-          }
-        });
-  
-        obj.userData.kind = kind;
-  
-        // Ensure Box3.setFromObject sees correct transforms
-        obj.updateMatrixWorld(true);
-  
-        this.world.add(obj);
-        this.obstacles.push(obj);
-        return;
+      // Match your prototype sizes:
+      // wall: ~3.0 tall, hurdle: ~1.1 tall, overhead: ~0.3 thick located around y=1.7
+      if (kind === "wall") {
+        if (spawnModel(src, { targetHeight: 3.0, desiredBottomY: 0.0, z: laneZ })) return;
+      } else if (kind === "hurdle") {
+        if (spawnModel(src, { targetHeight: 1.1, desiredBottomY: 0.0, z: laneZ })) return;
+      } else if (kind === "overhead") {
+        // Place overhead so its CENTER is around y=1.7 (like your box)
+        // We do this by setting bottom = center - height/2, after scaling.
+        // Use targetHeight ~0.35 so it’s not paper-thin.
+        const tmpBox = src ? new THREE.Box3().setFromObject(src) : null;
+        const tmpSize = new THREE.Vector3();
+        if (tmpBox) tmpBox.getSize(tmpSize);
+        // desired bottom will be computed after scaling inside spawnModel, so we set a center target:
+        // We'll approximate by saying bottom should be ~1.55 (1.7 - 0.35/2)
+        if (spawnModel(src, { targetHeight: 0.35, desiredBottomY: 1.55, z: 0.0 })) return;
       }
     }
   
-    // ---------- PROTOTYPE / FALLBACK: primitives ----------
+    // ---------- PROTOTYPE / FALLBACK: primitives (unchanged) ----------
     const modeKey = this.mode === "full" ? "full" : "proto";
     const mat = this.mats[modeKey].obstacle;
   
@@ -1017,7 +1336,6 @@ export class BadgerRunGame {
     mesh.position.set(x, y, z);
     mesh.userData.kind = kind;
   
-    // optional shadows in full even for fallback primitives
     mesh.castShadow = (this.mode === "full");
     mesh.receiveShadow = false;
   
@@ -1025,22 +1343,24 @@ export class BadgerRunGame {
     this.obstacles.push(mesh);
   }
   
+  
 
   async _ensureFullAssets() {
     if (this._fullLoaded) return;
   
     const [groundTex, badgerTex, coinModel, wallModel, hurdleModel, overheadModel] =
-  await Promise.all([
-    this.assets.loadTexture("ground", "/textures/ground2.jpg", { repeat: { x: 12, y: 1 } }),
-    this.assets.loadTexture("badger", "/textures/badger.jpg"),
-    this.assets.loadGLTF("coin", "/models/coin.glb"),
-    this.assets.loadGLTF("wall", "/models/obstacle_wall.glb"),
-    this.assets.loadGLTF("hurdle", "/models/obstacle_hurdle.glb"),
-    this.assets.loadGLTF("overhead", "/models/obstacle_overhead.glb"),
-  ]);
+      await Promise.all([
+        this.assets.loadTexture("ground", ASSET("textures/ground2.jpg"), { repeat: { x: 12, y: 1 } }),
+        this.assets.loadTexture("badger", ASSET("textures/badger.jpg")),
+        this.assets.loadGLTF("coin", ASSET("models/coin.glb")),
+        this.assets.loadGLTF("wall", ASSET("models/obstacle_wall.glb")),
+        this.assets.loadGLTF("hurdle", ASSET("models/obstacle_hurdle.glb")),
+        this.assets.loadGLTF("overhead", ASSET("models/obstacle_overhead.glb")),
+      ]);
   
     this.textures.ground = groundTex;
-    this.textures.badger = badgerTex;
+    //this.textures.badger = badgerTex;
+  
     this.models.coin = coinModel;
     this.models.wall = wallModel;
     this.models.hurdle = hurdleModel;
@@ -1048,6 +1368,7 @@ export class BadgerRunGame {
   
     this._fullLoaded = true;
   }
+  
   
 
   _applySkin() {
@@ -1061,14 +1382,22 @@ export class BadgerRunGame {
   _applyModeMaterials() {
     const modeKey = this.mode === "full" ? "full" : "proto";
 
+    // ONLY force the single-material badger on the proto badger
+    if (this.badger === this.badgerProto) {
+    this.badger.traverse((o) => {
+        if (o.isMesh) o.material = this.mats[modeKey].badger;
+    });
+    }
+
+    // DO NOT touch materials on the full badger (it uses multiple materials)
+
+
     this.ground.material = this.mats[modeKey].ground;
     for (const dash of this.dashes) dash.material = this.mats[modeKey].dash;
 
-    this.badger.traverse((o) => {
-      if (o.isMesh) o.material = this.mats[modeKey].badger;
-    });
-
-    for (const o of this.obstacles) o.material = this.mats[modeKey].obstacle;
+    for (const o of this.obstacles) {
+        if (o.isMesh) o.material = this.mats[modeKey].obstacle; // only primitive obstacles
+      }
     for (const c of this.coins) {
         if (c.isMesh) c.material = this.mats[modeKey].coin; // torus coins only
       }
@@ -1096,7 +1425,7 @@ export class BadgerRunGame {
 
     if (this.mode === "full") {
       if (this.textures.ground) this.mats.full.ground.map = this.textures.ground;
-      if (this.textures.badger) this.mats.full.badger.map = this.textures.badger;
+      
     }
 
     this.mats.full.ground.needsUpdate = true;
@@ -1157,6 +1486,7 @@ export class BadgerRunGame {
     if (!this.ownedSkins.has(id)) return false;
     if (this.activeSkinId === id) return false;
     this.activeSkinId = id;
+    this._applyEquippedSkin();
     this._applySkin();
     this._applyModeMaterials();
     this._saveProgress();

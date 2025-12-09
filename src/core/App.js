@@ -33,8 +33,7 @@ export class App {
 
     // --- Scene ---
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0b1020);
-    this.scene.fog = new THREE.Fog(0x0b1020, 12, 60);
+this._applyModeSceneLook(isFullMode);
 
     // --- Camera ---
     this.camera = new THREE.PerspectiveCamera(
@@ -111,6 +110,17 @@ export class App {
     // Optional: slightly brighten for Full mode (feel free to tweak)
     this.renderer.toneMappingExposure = full ? 1.05 : 1.0;
   }
+
+  _applyModeSceneLook(full) {
+    if (full) {
+      this.scene.background = new THREE.Color(0x79b8ff); // light blue
+      this.scene.fog = new THREE.Fog(0x79b8ff, 14, 75);
+    } else {
+      this.scene.background = new THREE.Color(0x0b1020); // dark blue
+      this.scene.fog = new THREE.Fog(0x0b1020, 12, 60);
+    }
+  }
+  
 
   _bindInputs() {
     window.addEventListener("keydown", (e) => {
@@ -198,6 +208,7 @@ export class App {
         const full = this.modeCheckbox.checked;
         await this.game.setMode(full ? "full" : "prototype");
         this._applyFullRenderSettings(full);
+        this._applyModeSceneLook(full);
       });
     }
   }
@@ -214,9 +225,9 @@ export class App {
   start() {
     this.game.reset();
   
-    const FIXED_DT = 1 / 60;     // simulation step
-    const MAX_FRAME_DT = 0.25;   // prevent huge catch-ups after tab switch
-    const MAX_STEPS = 6;         // prevent spiral of death
+    const FIXED_DT = 1 / 60;
+    const MAX_FRAME_DT = 0.25;   // avoid tab-switch explosions
+    const MAX_STEPS = 15;        // IMPORTANT: allow catch-up on low FPS
   
     let acc = 0;
   
@@ -225,12 +236,18 @@ export class App {
       frameDt = Math.min(frameDt, MAX_FRAME_DT);
       acc += frameDt;
   
+      // prevent infinite backlog
+      acc = Math.min(acc, 0.5);
+  
       let steps = 0;
       while (acc >= FIXED_DT && steps < MAX_STEPS) {
         this.game.update(FIXED_DT);
         acc -= FIXED_DT;
         steps++;
       }
+  
+      // if we hit the step cap, drop remaining lag so gameplay stays real-time
+      if (steps === MAX_STEPS) acc = 0;
   
       const uiState = this.game.getUIState();
       this.hud.update(uiState);
@@ -239,8 +256,10 @@ export class App {
       this.renderer.render(this.scene, this.camera);
       requestAnimationFrame(tick);
     };
+
   
     requestAnimationFrame(tick);
   }
+  
   
 }
