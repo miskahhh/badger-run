@@ -68,11 +68,6 @@ export class BadgerRunGame {
 
     // world content
     this._buildMaterials();
-    this.skins = [
-    { id: "default",  name: "Default",  cost: 0,  fur: 0x2a2a2a },
-    { id: "scarlet",  name: "Scarlet",  cost: 40, fur: 0x6b1b1b },
-    { id: "midnight", name: "Midnight", cost: 75, fur: 0x0b1020 },
-    ];
 
       
     this._buildGround();
@@ -98,9 +93,11 @@ export class BadgerRunGame {
     this.boxObs = new THREE.Box3();
 
     // load saved state + apply skin/materials
-    this._loadProgress();
-    this._applySkin();
-    this._applyModeMaterials();
+    // load saved state + apply skin/materials
+this._loadProgress();
+this._applyEquippedSkin();
+this._applyModeMaterials();
+
   }
 
   // ---------- Skins setup ----------
@@ -146,44 +143,45 @@ export class BadgerRunGame {
   }
 
   _applyEquippedSkin() {
-    const id = this.equippedSkinId ?? "default";
+    // use the active skin from skinDefs
+    const def = this.skinDefs[this.activeSkinId] ?? this.skinDefs.classic;
   
-    // Pull skin from whichever catalog you actually use
-    // Prefer an array catalog (this.skins), fallback to object (this.skinDefs)
-    const skin =
-      (Array.isArray(this.skins) ? this.skins.find(s => s.id === id) : null) ||
-      (this.skinDefs ? this.skinDefs[id] : null) ||
-      null;
-  
-    // Skin “fur” color (accept a few possible field names)
-    const fur =
-      skin?.fur ??
-      skin?.colors?.fur ??
-      skin?.colors?.dark ??      // backward compatible with your old palette skins
-      0x2a2a2a;
-  
-    // Proto badger: single material = fur
+    // ----- PROTOTYPE BADGER -----
+    // single material = protoColor
     if (this.mats?.proto?.badger?.color) {
-      this.mats.proto.badger.color.setHex(fur);
+      this.mats.proto.badger.color.set(def.protoColor);
       this.mats.proto.badger.needsUpdate = true;
     }
   
-    // Full badger: fur = badgerDark only
-    if (this.mats?.full?.badgerDark?.color) {
-      this.mats.full.badgerDark.color.setHex(fur);
-      this.mats.full.badgerDark.needsUpdate = true;
+    // ----- FULL BADGER -----
+    // treat fullColor as "overall fur color" and apply it to all major body mats
+    const c = def.fullColor;
+    const m = this.mats?.full;
+    if (!m) return;
+  
+    if (m.badgerDark?.color) {
+      m.badgerDark.color.set(c);
+      m.badgerDark.needsUpdate = true;
+    }
+    if (m.badgerLight?.color) {
+      m.badgerLight.color.set(c);
+      m.badgerLight.needsUpdate = true;
+    }
+    if (m.badgerStripe?.color) {
+      m.badgerStripe.color.set(c);
+      m.badgerStripe.needsUpdate = true;
     }
   
-    // Keep identity colors stable (optional but recommended)
-    if (this.mats?.full?.badgerLight?.color) {
-      this.mats.full.badgerLight.color.setHex(0xf6f6f6);
-      this.mats.full.badgerLight.needsUpdate = true;
+    // optional: also tint the legacy "badger" mat in case anything still uses it
+    if (m.badger?.color) {
+      m.badger.color.set(c);
+      m.badger.needsUpdate = true;
     }
-    if (this.mats?.full?.badgerStripe?.color) {
-      this.mats.full.badgerStripe.color.setHex(0xffffff);
-      this.mats.full.badgerStripe.needsUpdate = true;
-    }
+  
+    // keep eye/nose dark so the face stays readable
+    // (no change needed; they stay whatever you set in _buildMaterials)
   }
+  
   
   
 
@@ -1485,11 +1483,14 @@ export class BadgerRunGame {
   equipSkin(id) {
     if (!this.ownedSkins.has(id)) return false;
     if (this.activeSkinId === id) return false;
+  
     this.activeSkinId = id;
+  
+    // apply the new colors
     this._applyEquippedSkin();
-    this._applySkin();
-    this._applyModeMaterials();
+    this._applyModeMaterials();   // keep everything in sync with current mode
     this._saveProgress();
     return true;
   }
+  
 }
